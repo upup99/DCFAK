@@ -17,3 +17,10 @@ url = {https://www.sciencedirect.com/science/article/pii/S0262885625001738},
 author = {Jianming Zhang and Jiangxin Dai and Wentao Chen and Ke Nai},
 }
 ```
+
+
+
+The following is visual detection results:
+
+![image-20250603225959769](https://rainbowdj-1311333461.cos.ap-guangzhou.myqcloud.com/obsidian/research/image-20250603225959769.png)
+
