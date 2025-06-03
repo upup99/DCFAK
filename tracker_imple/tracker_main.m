@@ -27,7 +27,7 @@ params.init_sz = target_sz;
 features = params.t_features;
 params = init_default_params(params);
 init_target_sz = target_sz;
-
+%KF = trackingIMM('Trackingfilters',{trackingUKF, trackingEKF, trackingEKF},'State',[pos(1);0;pos(2);0]);
 % >
 
 % Set Global parameters and data type
@@ -111,8 +111,8 @@ img_support_sz = feature_info.img_support_sz;
 feature_sz = feature_info.data_sz;
 num_feature_blocks = size(feature_sz, 1);
 % >
-
-
+% disp(feature_sz);
+% Size of the extracted feature maps (filters)
 % <
 feature_sz_cell = permute(mat2cell(feature_sz, ones(1,num_feature_blocks), 2), [2 3 1]);
 filter_sz = feature_sz + mod(feature_sz+1, 2);
@@ -145,6 +145,10 @@ for i = 1:num_feature_blocks
     y_0{i}             = exp(-0.5 * (((rs.^2 + cs.^2) / mean(output_sigma)^2)));
     
     yf{i} = fft2(y_0{i});
+%     disp(y_0{i});
+%     y = exp(-0.5 * (((rs.^2 + cs.^2) / mean(output_sigma)^2)));
+% 
+%      yf{i}         = fft2(y);
 end
 % yf{1} = zeros(size(yf{1}));
 % yf{2} = zeros(size(yf{2}));
@@ -189,48 +193,6 @@ scale_exp = (-floor((nScales-1)/2):ceil((nScales-1)/2));
 scaleFactors = scale_step .^ scale_exp;
 % >
 
-% ------add----
-% <
-for i = 1:num_feature_blocks
-    obj_window{i} = yf{i} * 0;                   % obj_window is the crop matrix 
-    [sx,sy,~] = get_subwindow_no_window(obj_window{i}, floor(filter_sz_cell{i}/2) , filter_sz_cell{i});
-    seq.time = 0;
-    mask_c{i} = yf{i} * 0;
-%     mask_b{i} = yf{i} * 0 + 1;
-    if i == 1
-%         mask_b{i}(sx,sy) = 0;
-        mask_c{i}(sx,sy) = 1;
-    end
-    
-end
-% >
-
-% template
-% <
-template_filter = [];
-% >
-
-% Initialize motion estimotion and failure correction modules
-dx_pred = 0;
-dy_pred = 0;
-dx_true = 0;
-dy_true = 0;
-mean_max_val = [];
-
-resp_budg = params.resp_budg;
-resp_norm = params.resp_norm;
-tracking_state = params.tracking_state;  
-skip_check_beginning = params.skip_check_beginning;   
-uncertainty_thre = params.uncertainty_thre;    
-resp_budg_sz = params.resp_budg_sz;   
-quality = 0;
-minQuality = 100;
-maxQuality = 0;
-omega = 0;
-history_scores = [];
-tracking_state_learning = 1;
-% >
-
 seq.time = 0;
 scores_fs_feat = cell(1,1,num_feature_blocks);
 response_feat = cell(1,1,num_feature_blocks);
@@ -265,63 +227,24 @@ while true
     
     tic();
     % >
-    if seq.frame == 2
-        template_filter_first = filter_model_f;
-        template_filter = template_filter_first;
-    end
     
-%     particle_s1= [0, 0];
-%     particle_s2= [0, 0];
     %% Target localization step
     if seq.frame > 1
         global_fparams.augment = 0;
         old_pos = inf(size(pos));
         iter = 1;
         
-        % template select
-        if seq.frame > 2
-            if tracking_state == 2
-                filter_model_f = template_filter;
-            else
-                if tracking_state == 1
-                    filter_model_f{1} = bsxfun(@times, tracking_state_learning, template_filter{1}) + bsxfun(@times, 1 - tracking_state_learning , filter_model_f{1});
-                    filter_model_f{2} = bsxfun(@times, tracking_state_learning, template_filter{2}) + bsxfun(@times, 1 - tracking_state_learning , filter_model_f{2});
-                    filter_model_f{3} = bsxfun(@times, tracking_state_learning, template_filter{3}) + bsxfun(@times, 1 - tracking_state_learning , filter_model_f{3});
-                    template_filter = filter_model_f;
-                end
-            end
-        end
-        
         %translation search
         while iter <= params.refinement_iterations && any(old_pos ~= pos)
+            % Extract features at multiple resolutions
+            % <
             sample_pos = round(pos);
             sample_scale = currentScaleFactor*scaleFactors;
             [xt, img_samples] = extract_features(im, sample_pos, sample_scale, features, global_fparams, feature_info);
             xtw = cellfun(@(feat_map, cos_window) bsxfun(@times, feat_map, cos_window), xt, cos_window, 'uniformoutput', false);
+%             disp(xtw);
             xtf = cellfun(@fft2, xtw, 'uniformoutput', false);
-            
-            % visualize xt
-            % <
-%             disp(size(xt));
-%             for i = 1:numel(xt)
-%                 thisVal = xt{i};
-%                 newVal = zeros(size(thisVal));
-%                 for j = 1:size(thisVal,3)
-%                     newVal(:,:,j) = abs(gather(thisVal(:,:,j)));
-%                 end
-%                 xt{i} = newVal;
-%             end
-%             
-%             numPlots = numel(xt);
-%             for i = 1:numPlots
-% %                 subplot(1,numPlots,i);
-%                 figure;
-%                 imagesc(xt{i}(:,:,1));
-%                 colorbar;
-%                 title(['Visualization of Cell ', num2str(i)]);
-%             end
             % >
-            
             % Calculate and fuse responses
             % <
             response_handcrafted = 0;
@@ -330,22 +253,52 @@ while true
             for k = [k1 block_inds]
                 if feature_info.feature_is_deep(k) == 0
                     scores_fs_feat{k} = gather(sum(bsxfun(@times, conj(filter_model_f{k}), xtf{k}), 3));
+%                     disp(size(scores_fs_feat{k}));
+%                     disp(size(filter_model_f{k}));
+%                     tmp = zeros(size(scores_fs_feat{k}));
+%                     response_handpeak = zeros(size(scores_fs_feat{k}));
+%                     tmp = ifft2(scores_fs_feat{k}, 'symmetric');
+%                     disp(size(tmp));
+%                     response_handpeak = response_handpeak + tmp;
+%                     response_handpeak = sum(squeeze(tmp), 3);
+%                     response_peak{k} = response_handpeak;
+%                       response_peak{k} = sum(squeeze(scores_fs_feat{k}), 3);
+%                     disp(size(response_peak{k}));
+                    
                     scores_fs_feat{k} = resizeDFT2(scores_fs_feat{k}, output_sz);
                     response_feat{k} = ifft2(scores_fs_feat{k}, 'symmetric');
                     response_handcrafted = response_handcrafted + response_feat{k};
+%                     disp("***********");
+                    
+%                     disp(size(response_handcrafted));
+%                     yf{k} = peakoptimize(response_handcrafted, y_0, params); % 第三版新增处
                 else
                     output_sz_deep = round(output_sz/img_support_sz{k1}*img_support_sz{k});
                     output_sz_deep = output_sz_deep + 1 + mod(output_sz_deep,2);
                     scores_fs_feat{k} = gather(sum(bsxfun(@times, conj(filter_model_f{k}), xtf{k}), 3));
+%                     disp(size(scores_fs_feat{k}));
+%                     tmp = ifft2(scores_fs_feat{k}, 'symmetric');
+%                     response_handpeak = sum(squeeze(tmp), 3);
+%                     response_peak{k} = response_handpeak;
+                    
                     scores_fs_feat{k} = resizeDFT2(scores_fs_feat{k}, output_sz_deep);
                     response_feat{k} = ifft2(scores_fs_feat{k}, 'symmetric');
                     response_feat{k}(ceil(output_sz(1)/2)+1:output_sz_deep(1)-floor(output_sz(1)/2),:,:,:)=[];
                     response_feat{k}(:,ceil(output_sz(2)/2)+1:output_sz_deep(2)-floor(output_sz(2)/2),:,:)=[];
                     response_deep = response_deep + response_feat{k};
+%                     response_peak{k} = sum(squeeze(response_deep), 3);
+%                     disp(size(response_deep));
+%                     yf{k} = peakoptimize(response_deep, y_0, params); % 第三版新增处
                 end
+%                 disp("11111111");
+%                 disp(size(filter_model_f{k}));
             end
+%             disp(size(response_deep));
+%             disp(size(yf));
             [disp_row, disp_col, sind, ~, response, w] = resp_newton(squeeze(response_handcrafted)/feature_info.feature_hc_num, squeeze(response_deep)/feature_info.feature_deep_num,...
                 newton_iterations, ky, kx, output_sz);
+            % >
+%             disp(size(response));
             % Compute the translation vector
             % <
            skew = kurtosis(response,1,'all');
@@ -353,9 +306,9 @@ while true
                skew_first = skew;
            else
                noise = 0.1 * noise + 0.9 * max(7 * skew / skew_first, 7.1);
+               %noise = skew_first / skew;
+               %noise = min(7.3 * skew_first / skew, 7);
            end
-
-            %---
             translation_vec = [disp_row, disp_col] .* (img_support_sz{k1}./output_sz) * currentScaleFactor(1) * scaleFactors(sind);
             if seq.frame < 10
                 scale_change_factor = scaleFactors(ceil(params.number_of_scales/2));
@@ -371,94 +324,47 @@ while true
             if sum(isnan(translation_vec))
                 pos = sample_pos;
             else
+            %    if skew / skew_first > 0.15
                     pos = sample_pos + translation_vec;
+            %    else
+            %        disp("Kalman");
+            %        temp_pos = pos + translation_vec;
+            %        kf_pos = correct(KF,double([temp_pos(1);temp_pos(2);0]));
+            %        pos = 0.8 * temp_pos + 0.2 * [kf_pos(1),kf_pos(2)];
+            %    end
             end
-            % failure detection and correction
-            
-            [quality, mean_max_val] = resp_quality(response, mean_max_val);   
-            
-            if numel(resp_budg) >= skip_check_beginning
-                response_budget_mean = mean(resp_budg);
-                curr_quality_norm = quality / resp_norm;
-                curr_score = (response_budget_mean - curr_quality_norm) / curr_quality_norm;
-                history_scores(end + 1) = curr_quality_norm / response_budget_mean;
-                his_len = length(history_scores);
-                if his_len > 3
-                    if history_scores(his_len - 2) - history_scores(his_len - 1) > 0.2 && history_scores(his_len - 1) - history_scores(his_len) > 0.2
-                        tracking_state_learning = 0.9;
-                    elseif history_scores(his_len - 1) - history_scores(his_len - 2) > 0.2 && history_scores(his_len) - history_scores(his_len - 1) > 0.2
-                        tracking_state_learning = 0.1;
-                    else
-                        tracking_state_learning = 1 - history_scores(end);
-                    end
-                end
-                        
-                if curr_score > uncertainty_thre
-                    tracking_state = 2;  % Failure tracking
-                else
-                    tracking_state = 1;  
-                end
-            else
-                tracking_state = 1; 
-            end 
+            %correct(KF,double([pos(1);pos(2);0]));
             
             if params.clamp_position
                 pos = max([1 1], min([size(im,1) size(im,2)], pos));
             end
             % >
+            
             % Update the scale
             % <
             currentScaleFactor = currentScaleFactor * scale_change_factor;
             % >
-
-			% construct masks
-            for i = 1:num_feature_blocks
-                response_pre_window = circshift(response(:,:,sind), -floor(output_sz(1:2)/2)+1);           
-                max_M_curr = max(response_pre_window(:));
-                [id_xmax_curr, id_ymax_curr] = find(response_pre_window == max_M_curr);     
-                shift_y = id_ymax_curr - (ceil(output_sz(1)/2)+1);
-                shift_x = id_xmax_curr - (ceil(output_sz(2)/2)+1);
-                mask_c{i} = yf{i} * 0;
-                if i == 1
-                    if min(sx+shift_x)<=0 || min(sy+shift_y)<=0 || max(sx+shift_x) > max(size(mask_c{i})) || max(sy+shift_y) > max(size(mask_c{i}))
-% %                         mask_b{i}(sx,sy) = params.b_amplify_center;
-                        mask_c{i}(sx,sy) = params.c_amplify;
-                    else
-% %                         mask_b{i}(sx+shift_x,sy+shift_y) = params.b_amplify_center;
-                        mask_c{i}(sx+shift_x,sy+shift_y) = params.c_amplify;
-                    end
-%                     mask_c{i}(sx,sy) = params.c_amplify;
-                end
-            end
-            
-            % < 可视化response
-%             disp(response(:,:,2))
-%             disp(size(response));
-%             R = sum(response, 3);
-%             figure;
-%             surf(fftshift(R(:, :)));
-%             dataname = ['D:\CFTrackers-SUM\论文图表\singer2_response\' num2str(seq.frame) '.png'];
-%             saveas(gcf, dataname);
-            % >
-
             iter = iter + 1;
         end
+        
+%         disp(size(response_peak{2}));
         response_peak1 = sum(response, 3);
-        yf{1} = peakoptimize(response_peak1, y_0{1}, params, disp_row, disp_col, win, reg_sz); 
+%         disp(size(response_peak1));
+%         response_sz = size(response_peak1);
+%         if response_sz(1) > 50
+            yf{1} = peakoptimize(response_peak1, y_0{1}, params, disp_row, disp_col, win, reg_sz); % 第三版新增处 
+%         else
+%             yf{1} = fft2(y_0{1});
+%         end
+%         yf2{2} = peakoptimize(response_peak{2}, y_0{2}, params, disp_row, disp_col, win{2}, reg_sz); % 第三版新增处 
+%         yf2{2} = fft2(y_0{2});
+%         yf2{3} = peakoptimize(response_handcrafted, y_0{3}, params, disp_row, disp_col, win{3}, reg_sz); % 第三版新增处 
+%         yf2{3} = fft2(y_0{3});
+%         disp(yf2);
     end
     
-    % Record the historical information of the response map
-    if tracking_state == 1 && seq.frame > 1
-        if isempty(resp_budg)
-            resp_norm = quality;
-            resp_budg(end+1) = 1;
-        else
-            resp_budg(end+1) = quality / resp_norm;
-            if numel(resp_budg) > resp_budg_sz
-                resp_budg(1) = [];
-            end
-        end
-    end
+%     disp(yf);
+    
     
     %% Model update step
     % Extract features and learn filters
@@ -468,17 +374,8 @@ while true
     [xl, ~] = extract_features(im, sample_pos, currentScaleFactor, features, global_fparams, feature_info);
     xlw = cellfun(@(feat_map, cos_window) bsxfun(@times, feat_map, cos_window), xl, cos_window, 'uniformoutput', false);
     xlf = cellfun(@fft2, xlw, 'uniformoutput', false);
-
-    mask_c_cell = reshape(mask_c, 1, 1, num_feature_blocks);
-%         xb_cell = cellfun(@(feat_map, mask_b_cell) bsxfun(@times, feat_map, mask_b_cell), xl, mask_b_cell, 'uniformoutput', false);
-    xc_cell = cellfun(@(feat_map, mask_c_cell) bsxfun(@times, feat_map, mask_c_cell), xl, mask_c_cell, 'uniformoutput', false);
-
-%         xb_fft = cellfun(@fft2, xb_cell, 'uniformoutput', false);
-    xc_fft = cellfun(@fft2, xc_cell, 'uniformoutput', false);
-
-    
-    [filter_model_f,spatial_units, channels] = train_filter2(xlf, feature_info, yf, seq, params, filter_model_f, xc_fft); 
-%     [filter_model_f,spatial_units, channels] = train_filter(xlf, feature_info, yf, seq, params, filter_model_f); 
+%     disp(size(xlf{1}));
+    [filter_model_f,spatial_units, channels] = train_filter(xlf, feature_info, yf, seq, params, filter_model_f); 
     
     % Update the target size
     % <
@@ -497,9 +394,7 @@ while true
     % <
     if params.vis_res
         rect_position_vis = [pos([2,1]) - (target_sz([2,1]) - 1)/2, target_sz([2,1])];
-%         disp(rect_position_vis)
         im_to_show = double(im)/255;
-%         disp(size(im_to_show));
         if size(im_to_show,3) == 1
             im_to_show = repmat(im_to_show, [1 1 3]);
         end
@@ -521,7 +416,6 @@ while true
             text(10, 10, int2str(seq.frame), 'color', [0 1 1], 'FontSize',20);
             hold off;
         end
-
         drawnow
     end
     

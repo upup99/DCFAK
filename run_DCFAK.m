@@ -1,4 +1,4 @@
-function results = run_GFSDCF_1(seq, res_path, bSaveImage)
+function results = run_DCFAK(seq, res_path, bSaveImage)
 % Set tracker parameters and run tracker
 % Input  : seq[structure](sequence information)
 % Output : results[structure](tracking results)
@@ -6,7 +6,7 @@ function results = run_GFSDCF_1(seq, res_path, bSaveImage)
 % Tianyang Xu, Zhen-Hua Feng, Xiao-Jun Wu, Josef Kittler. Joint Group 
 % Feature Selection and Discriminative Filter Learning for Robust Visual Object 
 % Tracking. In ICCV 2019.
-% addpath('./GFSDCF');
+addpath('./DCFAK');
 setup_paths();
 % [results] = OTBsettings(seq);
 %% Set feature parameters
@@ -38,14 +38,8 @@ params.t_features = {
     struct('getFeature',@get_fhog,'fparams',hog_params),...
     struct('getFeature',@get_table_feature, 'fparams',cn_params),...
     struct('getFeature',@get_dagnn_layers, 'fparams',dagnn_params),...
-%     struct('getFeature',@get_table_feature, 'fparams',ic_params),...
+    struct('getFeature',@get_table_feature, 'fparams',ic_params),...
 };
-
-% params.t_features = {
-%     struct('getFeature',@get_fhog,'fparams',hog_params),...
-%     struct('getFeature',@get_table_feature, 'fparams',cn_params),...
-%     struct('getFeature',@get_table_feature, 'fparams',ic_params),...
-% };
 
 % Set [non-deep deep] parameters
 params.learning_rate = [0.6 0.05];          % updating rate in each learning stage
@@ -53,7 +47,7 @@ params.channel_selection_rate = [0.9 0.075];% channel selection ratio
 params.spatial_selection_rate = [0.1 0.9];  % spatial units selection ratio
 params.output_sigma_factor = [1/16 1/4];	% desired label setting
 params.lambda1 = 10;                         % lambda_1
-params.lambda2 = 0.1;                         % lambda_2
+params.lambda2 = 1;                         % lambda_2
 params.lambda3 = [16 12];                   % lambda_3
 params.stability_factor = [0 0];            % robustness testing parameter
 
@@ -70,34 +64,17 @@ params.newton_iterations = 5;               % subgrid localisation numbers
 params.number_of_scales = 7;                % scale pyramid size
 params.scale_step = 1.01;                   % scale step ratio
 
-% 新增
-params.reg_window_max=1e5;
-params.reg_window_min=1e-3;
-params.local_nums=30;
-params.beta=0.25;
-
-params.b_amplify = 1;
-params.b_amplify_center = 0;
-params.c_amplify = 1;
-
-% Failure correction parameters
-params.resp_budg = [];
-params.resp_norm = 0;
-params.tracking_state = 1;  
-params.skip_check_beginning = 5;   
-params.uncertainty_thre = 1.0;    
-params.resp_budg_sz = 100; 
-% Smoothing constant
-params.alpha = 0.2;
-
 % Set GPU 
 params.use_gpu = true;                 
 params.gpu_id = [];              
 
 % Initialisation
-params.vis_res = 0;                         % visualisation results
+params.vis_res = 1;                         % visualisation results
 params.vis_details = 0;                     % visualisation details for debug
 params.seq = seq;   
+
+% 新增可视化参数
+params.show_regularization = 1;
 
 % Run tracker
 [results] = tracker_main(params);
